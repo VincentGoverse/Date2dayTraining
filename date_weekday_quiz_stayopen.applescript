@@ -111,7 +111,7 @@ on promptForWeekday(shownDate)
 end promptForWeekday
 
 on runQuiz()
-    set targetCorrect to 10
+    set targetCorrect to 3
     set score to 0
 
     repeat while score < targetCorrect
@@ -181,4 +181,3 @@ on idle
     end try
     return checkIntervalSeconds
 end idle
-

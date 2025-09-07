@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Simple macOS-friendly Tkinter quiz that asks the user to identify
-the weekday for random dates from the last 100 years until 10 correct
+the weekday for random dates from the last 100 years until 3 correct
 answers are given.
 """
 
