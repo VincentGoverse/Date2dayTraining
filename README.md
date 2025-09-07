@@ -48,7 +48,7 @@ osacompile -o "$HOME/Applications/Date Weekday Quiz.app" date_weekday_quiz_stayo
 
 3) Test it:
 - Double‑click `~/Applications/Date Weekday Quiz.app` to show the quiz.
-- Put your Mac to sleep, wake it; within ~20s the quiz appears.
+- Put your Mac to sleep, wake it; within ~5s the quiz appears.
 
 Tweak interval: edit `checkIntervalSeconds` near the top of `date_weekday_quiz_stayopen.applescript`.
 
