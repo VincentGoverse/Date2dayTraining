@@ -12,6 +12,17 @@ on twoDigits(n)
     return text -2 thru -1 of s
 end twoDigits
 
+on isoTimestamp(d)
+    set y to year of d as integer
+    set m to month of d as integer
+    set dd to day of d as integer
+    set tSec to time of d as integer
+    set hh to (tSec div hours) as integer
+    set mm to ((tSec mod hours) div minutes) as integer
+    set ss to (tSec mod minutes) as integer
+    return (y as string) & "-" & twoDigits(m) & "-" & twoDigits(dd) & " " & twoDigits(hh) & ":" & twoDigits(mm) & ":" & twoDigits(ss)
+end isoTimestamp
+
 on prettyDate(d)
     -- Format: YYYY MonthName D (e.g., 2024 September 7)
     set y to year of d as integer
@@ -77,6 +88,44 @@ on toLower(s)
     end try
 end toLower
 
+on logFilePath()
+    return (POSIX path of (path to library folder from user domain)) & "Logs/Date Weekday Quiz.log"
+end logFilePath
+
+on ensureLogsDir()
+    try
+        set logsDir to (POSIX path of (path to library folder from user domain)) & "Logs"
+        do shell script "mkdir -p " & quoted form of logsDir
+    end try
+end ensureLogsDir
+
+on appendLog(lineText)
+    try
+        my ensureLogsDir()
+        set lf to my logFilePath()
+        do shell script "printf %s\\n " & quoted form of (lineText as string) & " >> " & quoted form of lf
+    end try
+end appendLog
+
+on formatSeconds(n)
+    set n to n as real
+    set tenthsInt to (n * 10) as integer
+    set rounded to tenthsInt / 10.0
+    return rounded as string
+end formatSeconds
+
+on joinWithCommas(lst)
+    set {oldTID, text item delimiters} to {text item delimiters, ", "}
+    try
+        set s to lst as string
+    on error
+        set text item delimiters to oldTID
+        error
+    end try
+    set text item delimiters to oldTID
+    return s
+end joinWithCommas
+
 on normalizedWeekdayName(ansText)
     set t to stripTrailingDots(trimWhitespace(ansText))
     set t to toLower(t)
@@ -113,8 +162,15 @@ end promptForWeekday
 on runQuiz()
     set targetCorrect to 3
     set score to 0
+    set attempts to 0
+    set timesSec to {}
+
+    set sessionStartDate to (current date)
+    set sessionStartIso to my isoTimestamp(sessionStartDate)
+    my appendLog("session_start\ttimestamp=" & sessionStartIso)
 
     repeat while score < targetCorrect
+        set qStart to (current date)
         set d to randomDateLast100Years()
         set shown to prettyDate(d)
         set correct to (weekday of d) as string
@@ -125,7 +181,28 @@ on runQuiz()
         repeat
             set a to promptForWeekday(shown)
             if a is missing value then
-                display alert "Quit" message ("Quiz cancelled. Final score: " & score & " / " & targetCorrect) as informational buttons {"OK"} default button "OK"
+                set qElapsed to ((current date) - qStart) as real
+                set endIso to my isoTimestamp(current date)
+                set sr to 0
+                if attempts > 0 then set sr to (score / attempts) * 100
+                my appendLog("question\ttimestamp=" & endIso & "\tstatus=cancelled\telapsed_s=" & my formatSeconds(qElapsed) & "\tshown=\"" & shown & "\"\tcorrect=\"" & correct & "\"\tscore=" & score & "\tattempts=" & attempts & "\tsuccess_rate_pct=" & (sr as string))
+
+                set timesStrings to {}
+                repeat with t in timesSec
+                    set end of timesStrings to my formatSeconds(t)
+                end repeat
+                set summaryTimes to my joinWithCommas(timesStrings)
+                display alert "Quit" message ("Quiz cancelled. Final score: " & score & " / " & targetCorrect & return & "Times (s) per question: " & summaryTimes) as informational buttons {"OK"} default button "OK"
+
+                set avg to 0
+                if (count of timesSec) > 0 then
+                    set total to 0
+                    repeat with t in timesSec
+                        set total to total + t
+                    end repeat
+                    set avg to total / (count of timesSec)
+                end if
+                my appendLog("session_end\ttimestamp=" & endIso & "\tstatus=cancelled\ttotal_questions=" & attempts & "\tcorrect=" & score & "\tsuccess_rate_pct=" & (sr as string) & "\tavg_elapsed_s=" & my formatSeconds(avg))
                 return
             end if
             set typed to a
@@ -137,15 +214,43 @@ on runQuiz()
             end if
         end repeat
 
-        if canon is equal to correct then
+        set qElapsed to ((current date) - qStart) as real
+        set endIso to my isoTimestamp(current date)
+        set attempts to attempts + 1
+        set end of timesSec to qElapsed
+
+        set wasCorrect to (canon is equal to correct)
+        if wasCorrect then
             set score to score + 1
-            display alert "Correct" message ("Correct! " & score & " / " & targetCorrect & return & shown & " → " & correct) as informational buttons {"OK"} default button "OK"
+            set msg to ("Correct! " & score & " / " & targetCorrect & return & shown & " → " & correct)
+            display alert "Correct" message msg as informational buttons {"OK"} default button "OK"
         else
-            display alert "Incorrect" message ("You answered: " & typed & return & "For " & shown & ", correct is: " & correct & ".") as warning buttons {"OK"} default button "OK"
+            set msg to ("You answered: " & typed & return & "For " & shown & ", correct is: " & correct & ".")
+            display alert "Incorrect" message msg as warning buttons {"OK"} default button "OK"
         end if
+
+        set sr to (score / attempts) * 100
+        my appendLog("question\ttimestamp=" & endIso & "\tstatus=" & (wasCorrect as string) & "\telapsed_s=" & my formatSeconds(qElapsed) & "\tanswer=\"" & typed & "\"\tnormalized=\"" & canon & "\"\tshown=\"" & shown & "\"\tcorrect=\"" & correct & "\"\tscore=" & score & "\tattempts=" & attempts & "\tsuccess_rate_pct=" & (sr as string))
     end repeat
 
-    display alert "All Done" message ("All done — " & targetCorrect & "/" & targetCorrect & "!") as informational buttons {"OK"} default button "OK"
+    set endIso to my isoTimestamp(current date)
+    set timesStrings to {}
+    repeat with t in timesSec
+        set end of timesStrings to my formatSeconds(t)
+    end repeat
+    set summaryTimes to my joinWithCommas(timesStrings)
+    display alert "All Done" message ("All done — " & targetCorrect & "/" & targetCorrect & "!" & return & "Times (s) per question: " & summaryTimes) as informational buttons {"OK"} default button "OK"
+
+    set avg to 0
+    if (count of timesSec) > 0 then
+        set total to 0
+        repeat with t in timesSec
+            set total to total + t
+        end repeat
+        set avg to total / (count of timesSec)
+    end if
+    set sr to (score / attempts) * 100
+    my appendLog("session_end\ttimestamp=" & endIso & "\tstatus=completed\ttotal_questions=" & attempts & "\tcorrect=" & score & "\tsuccess_rate_pct=" & (sr as string) & "\tavg_elapsed_s=" & my formatSeconds(avg))
 end runQuiz
 
 on getLastWakeSignature()

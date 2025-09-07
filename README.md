@@ -12,6 +12,13 @@ Both AppleScript versions:
 - Show feedback with your score; finish at 3/3
 - Cancel quits immediately with a small summary
 
+## Logging
+
+- Location: `~/Library/Logs/Date Weekday Quiz.log`
+- Per question: timestamp, elapsed seconds, result (true/false/cancelled), typed answer, normalized answer, shown date, correct weekday, running score, attempts, success rate percent.
+- Per session: start/end lines with status (completed/cancelled), totals, success rate, and average time.
+- End-of-session dialogs also include a “Times (s) per question” summary.
+
 ## Run the AppleScript Version (one‑off)
 
 No dependencies; uses native macOS dialogs.
