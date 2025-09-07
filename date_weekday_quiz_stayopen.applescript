@@ -3,7 +3,7 @@
 -- Shows the quiz at login and again after each wake from sleep.
 
 property lastWakeSig : ""
-property checkIntervalSeconds : 20
+property checkIntervalSeconds : 5
 property isShowingQuiz : false
 
 on twoDigits(n)
