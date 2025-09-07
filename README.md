@@ -1,40 +1,16 @@
 # Date to Weekday Training
 
-This repo contains two Mac-friendly versions of a date→weekday quiz:
+This repo contains two AppleScript versions of a date→weekday quiz:
 
-- `date_weekday_quiz.py`: Python 3 + Tkinter dialogs
 - `date_weekday_quiz.applescript`: AppleScript with native macOS dialogs
 - `date_weekday_quiz_stayopen.applescript`: AppleScript app that shows the quiz at login and after each wake from sleep (Option A)
 
-Both versions:
+Both AppleScript versions:
 - Random dates from the last 100 years
 - Ask: “What day of the week is YYYY Month D?”
 - Accept: full names (e.g. "Monday") or common abbreviations ("Mon", plus variants like "Tues", "Weds", "Thur/Thurs") — case-insensitive
 - Show feedback with your score; finish at 3/3
-- Logs each attempt to `attempts.csv` with: start time, question text, and time spent (plus answer and correctness)
 - Cancel quits immediately with a small summary
-
-## Run the Python Version
-
-Requirements: macOS with Python 3. Tkinter is built-in. Some systems print a Tk deprecation warning; it is safe to ignore.
-
-Run from the project folder:
-
-```bash
-python3 date_weekday_quiz.py
-# or
-chmod +x date_weekday_quiz.py && ./date_weekday_quiz.py
-```
-
-Optional: suppress the Tk deprecation warning on macOS
-
-```bash
-TK_SILENCE_DEPRECATION=1 python3 date_weekday_quiz.py
-```
-
-Notes:
-- Dialogs stay on top; prompt shows the date clearly.
-- Press Enter to submit, Esc/Cancel to quit.
 
 ## Run the AppleScript Version (one‑off)
 
@@ -87,6 +63,4 @@ Then quit and relaunch the app.
 
 ## Troubleshooting
 
-- Blank Tk dialog (rare on some macOS Tk builds): The Python script uses a custom dialog to ensure the prompt is visible. If you still see blank native message boxes, prefer the AppleScript version.
-- Tk deprecation warning: Run with `TK_SILENCE_DEPRECATION=1` or use the AppleScript version.
 - AppleScript permissions: If prompts don’t appear, make sure the app/script isn’t blocked by Focus modes or Screen Time limits.
