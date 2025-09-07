@@ -22,6 +22,14 @@ osascript date_weekday_quiz.applescript
 chmod +x date_weekday_quiz.applescript && ./date_weekday_quiz.applescript
 ```
 
+Optional: compile the one‑off script to an app you can double‑click:
+
+```bash
+mkdir -p "$HOME/Applications"
+osacompile -o "$HOME/Applications/Date Weekday Quiz (One-Off).app" date_weekday_quiz.applescript
+```
+Then launch it from `~/Applications`.
+
 ## Run at Login and After Wake (Option A)
 
 Use the stay‑open AppleScript as a small background app that:
