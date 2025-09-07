@@ -11,6 +11,7 @@ Both versions:
 - Ask: “What day of the week is YYYY Month D?”
 - Accept: full names (e.g. "Monday") or common abbreviations ("Mon", plus variants like "Tues", "Weds", "Thur/Thurs") — case-insensitive
 - Show feedback with your score; finish at 3/3
+- Logs each attempt to `attempts.csv` with: start time, question text, and time spent (plus answer and correctness)
 - Cancel quits immediately with a small summary
 
 ## Run the Python Version

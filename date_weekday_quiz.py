@@ -5,8 +5,11 @@ the weekday for random dates from the last 100 years until 3 correct
 answers are given.
 """
 
+import csv
+import os
 import random
-from datetime import date, timedelta
+import time
+from datetime import date, timedelta, datetime
 import tkinter as tk
 from tkinter import simpledialog, messagebox
 
@@ -40,6 +43,55 @@ _SYN_TO_INDEX = {
     # Sunday
     "sun": 0, "sunday": 0,  "su": 0,
 }
+
+
+# CSV logging setup
+CSV_PATH = os.path.join(os.path.dirname(__file__), "attempts.csv")
+
+
+def log_attempt(
+    started_at_iso: str,
+    question: str,
+    duration_seconds: float,
+    date_iso: str,
+    expected_weekday: str,
+    answer: str,
+    is_correct: bool,
+):
+    """Append a single attempt row to attempts.csv.
+
+    Columns: started_at, question, duration_seconds, date_iso, expected_weekday, answer, is_correct
+    """
+    headers = [
+        "started_at",
+        "question",
+        "duration_seconds",
+        "date_iso",
+        "expected_weekday",
+        "answer",
+        "is_correct",
+    ]
+
+    try:
+        needs_header = not os.path.exists(CSV_PATH) or os.path.getsize(CSV_PATH) == 0
+        with open(CSV_PATH, "a", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=headers)
+            if needs_header:
+                w.writeheader()
+            w.writerow(
+                {
+                    "started_at": started_at_iso,
+                    "question": question,
+                    "duration_seconds": f"{duration_seconds:.3f}",
+                    "date_iso": date_iso,
+                    "expected_weekday": expected_weekday,
+                    "answer": str(answer),
+                    "is_correct": "true" if is_correct else "false",
+                }
+            )
+    except Exception:
+        # Swallow logging errors to avoid interrupting the quiz UI
+        pass
 
 
 def random_date_last_100_years() -> date:
@@ -154,10 +206,14 @@ def main() -> int:
 
     while score < target_correct:
         d = random_date_last_100_years()
-        correct_idx = d.weekday()  # 0=Monday .. 6=Sunday
+        # Convert Python weekday (Mon=0..Sun=6) to our scheme (Sun=0..Sat=6)
+        correct_idx = (d.weekday() + 1) % 7  # 0=Sunday .. 6=Saturday
         correct_full = WEEKDAY_NAMES[correct_idx]
 
         prompt = f"What day of the week is {d.isoformat()}?"
+
+        started_at = datetime.now().isoformat(timespec="seconds")
+        t0 = time.perf_counter()
 
         # Get an answer; allow Cancel to quit gracefully
         while True:
@@ -182,6 +238,7 @@ def main() -> int:
                 continue
             break
 
+        duration = time.perf_counter() - t0
         idx = answer_to_index(ans)
         if idx == correct_idx:
             score += 1
@@ -190,11 +247,29 @@ def main() -> int:
                 f"Correct! {score} / {target_correct}\n{d.isoformat()} → {correct_full}",
                 parent=root,
             )
+            log_attempt(
+                started_at_iso=started_at,
+                question=prompt,
+                duration_seconds=duration,
+                date_iso=d.isoformat(),
+                expected_weekday=correct_full,
+                answer=ans,
+                is_correct=True,
+            )
         else:
             messagebox.showwarning(
                 "Incorrect",
                 f"You answered: {ans}\nFor {d.isoformat()}, correct is: {correct_full}.",
                 parent=root,
+            )
+            log_attempt(
+                started_at_iso=started_at,
+                question=prompt,
+                duration_seconds=duration,
+                date_iso=d.isoformat(),
+                expected_weekday=correct_full,
+                answer=ans,
+                is_correct=False,
             )
 
     messagebox.showinfo("All Done", f"All done — {target_correct}/{target_correct}!", parent=root)
