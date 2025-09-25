@@ -5,6 +5,32 @@
 property lastWakeSig : ""
 property checkIntervalSeconds : 5
 property isShowingQuiz : false
+property uiUnavailable : false
+property pendingSigLogged : ""
+
+on appProcessName()
+    try
+        set f to (path to me) as alias
+        set finfo to info for f
+        set nm to name of finfo
+        if nm ends with ".app" then set nm to text 1 thru -5 of nm
+        return nm
+    on error
+        return ""
+    end try
+end appProcessName
+
+on ensureFrontmost()
+    try
+        activate
+    end try
+    try
+        set nm to my appProcessName()
+        if nm is not "" then
+            tell application "System Events" to set frontmost of (first application process whose name is nm) to true
+        end if
+    end try
+end ensureFrontmost
 
 on twoDigits(n)
     set n to (n as integer)
@@ -103,7 +129,7 @@ on appendLog(lineText)
     try
         my ensureLogsDir()
         set lf to my logFilePath()
-        do shell script "printf %s\\n " & quoted form of (lineText as string) & " >> " & quoted form of lf
+        do shell script "printf '%s\\n' " & quoted form of (lineText as string) & " >> " & quoted form of lf
     end try
 end appendLog
 
@@ -113,6 +139,13 @@ on formatSeconds(n)
     set rounded to tenthsInt / 10.0
     return rounded as string
 end formatSeconds
+
+on formatPercent(n)
+    set n to n as real
+    set tenthsInt to (n * 10) as integer
+    set rounded to tenthsInt / 10.0
+    return rounded as string
+end formatPercent
 
 on joinWithCommas(lst)
     set {oldTID, text item delimiters} to {text item delimiters, ", "}
@@ -152,10 +185,18 @@ end randomDateLast100Years
 on promptForWeekday(shownDate)
     set dlgText to "What day of the week is " & shownDate & "?" & return & "(e.g., Mon or Monday)"
     try
+        my ensureFrontmost()
         set r to display dialog dlgText default answer "" with icon note buttons {"Cancel", "OK"} default button "OK" cancel button "Cancel"
         return text returned of r
-    on error number -128
-        return missing value
+    on error errMsg number errNum
+        if errNum is -128 then
+            return missing value
+        else if errNum is -1719 or errNum is -1743 then
+            set uiUnavailable to true
+            return missing value
+        else
+            error errMsg number errNum
+        end if
     end try
 end promptForWeekday
 
@@ -165,9 +206,9 @@ on runQuiz()
     set attempts to 0
     set timesSec to {}
 
-    set sessionStartDate to (current date)
-    set sessionStartIso to my isoTimestamp(sessionStartDate)
-    my appendLog("session_start\ttimestamp=" & sessionStartIso)
+    -- Only log session_start once we actually begin interacting
+    set sessionStartDate to missing value
+    set sessionStartIso to ""
 
     repeat while score < targetCorrect
         set qStart to (current date)
@@ -181,17 +222,24 @@ on runQuiz()
         repeat
             set a to promptForWeekday(shown)
             if a is missing value then
+                if uiUnavailable then
+                    -- UI not available (likely lock screen). Defer quiz without alerts/log spam.
+                    set uiUnavailable to false
+                    my appendLog("deferred\ttimestamp=" & my isoTimestamp(current date) & "\treason=ui_unavailable")
+                    return false
+                end if
                 set qElapsed to ((current date) - qStart) as real
                 set endIso to my isoTimestamp(current date)
                 set sr to 0
                 if attempts > 0 then set sr to (score / attempts) * 100
-                my appendLog("question\ttimestamp=" & endIso & "\tstatus=cancelled\telapsed_s=" & my formatSeconds(qElapsed) & "\tshown=\"" & shown & "\"\tcorrect=\"" & correct & "\"\tscore=" & score & "\tattempts=" & attempts & "\tsuccess_rate_pct=" & (sr as string))
+                my appendLog("question\ttimestamp=" & endIso & "\tstatus=cancelled\telapsed_s=" & my formatSeconds(qElapsed) & "\tshown=\"" & shown & "\"\tcorrect=\"" & correct & "\"\tscore=" & score & "\tattempts=" & attempts & "\tsuccess_rate_pct=" & my formatPercent(sr))
 
                 set timesStrings to {}
                 repeat with t in timesSec
                     set end of timesStrings to my formatSeconds(t)
                 end repeat
                 set summaryTimes to my joinWithCommas(timesStrings)
+                my ensureFrontmost()
                 display alert "Quit" message ("Quiz cancelled. Final score: " & score & " / " & targetCorrect & return & "Times (s) per question: " & summaryTimes) as informational buttons {"OK"} default button "OK"
 
                 set avg to 0
@@ -203,11 +251,19 @@ on runQuiz()
                     set avg to total / (count of timesSec)
                 end if
                 my appendLog("session_end\ttimestamp=" & endIso & "\tstatus=cancelled\ttotal_questions=" & attempts & "\tcorrect=" & score & "\tsuccess_rate_pct=" & (sr as string) & "\tavg_elapsed_s=" & my formatSeconds(avg))
-                return
+                return true
             end if
+            -- We are able to interact with UI; mark session start if not yet
+            if sessionStartDate is missing value then
+                set sessionStartDate to (current date)
+                set sessionStartIso to my isoTimestamp(sessionStartDate)
+                my appendLog("session_start\ttimestamp=" & sessionStartIso)
+            end if
+
             set typed to a
             set canon to normalizedWeekdayName(a)
             if canon is "" then
+                my ensureFrontmost()
                 display alert "Answer Required" message "Please enter a weekday (e.g., Mon or Monday)." as informational buttons {"OK"} default button "OK"
             else
                 exit repeat
@@ -223,14 +279,16 @@ on runQuiz()
         if wasCorrect then
             set score to score + 1
             set msg to ("Correct! " & score & " / " & targetCorrect & return & shown & " → " & correct)
+            my ensureFrontmost()
             display alert "Correct" message msg as informational buttons {"OK"} default button "OK"
         else
             set msg to ("You answered: " & typed & return & "For " & shown & ", correct is: " & correct & ".")
+            my ensureFrontmost()
             display alert "Incorrect" message msg as warning buttons {"OK"} default button "OK"
         end if
 
         set sr to (score / attempts) * 100
-        my appendLog("question\ttimestamp=" & endIso & "\tstatus=" & (wasCorrect as string) & "\telapsed_s=" & my formatSeconds(qElapsed) & "\tanswer=\"" & typed & "\"\tnormalized=\"" & canon & "\"\tshown=\"" & shown & "\"\tcorrect=\"" & correct & "\"\tscore=" & score & "\tattempts=" & attempts & "\tsuccess_rate_pct=" & (sr as string))
+        my appendLog("question\ttimestamp=" & endIso & "\tstatus=" & (wasCorrect as string) & "\telapsed_s=" & my formatSeconds(qElapsed) & "\tanswer=\"" & typed & "\"\tnormalized=\"" & canon & "\"\tshown=\"" & shown & "\"\tcorrect=\"" & correct & "\"\tscore=" & score & "\tattempts=" & attempts & "\tsuccess_rate_pct=" & my formatPercent(sr))
     end repeat
 
     set endIso to my isoTimestamp(current date)
@@ -239,6 +297,7 @@ on runQuiz()
         set end of timesStrings to my formatSeconds(t)
     end repeat
     set summaryTimes to my joinWithCommas(timesStrings)
+    my ensureFrontmost()
     display alert "All Done" message ("All done — " & targetCorrect & "/" & targetCorrect & "!" & return & "Times (s) per question: " & summaryTimes) as informational buttons {"OK"} default button "OK"
 
     set avg to 0
@@ -250,15 +309,21 @@ on runQuiz()
         set avg to total / (count of timesSec)
     end if
     set sr to (score / attempts) * 100
-    my appendLog("session_end\ttimestamp=" & endIso & "\tstatus=completed\ttotal_questions=" & attempts & "\tcorrect=" & score & "\tsuccess_rate_pct=" & (sr as string) & "\tavg_elapsed_s=" & my formatSeconds(avg))
+    my appendLog("session_end\ttimestamp=" & endIso & "\tstatus=completed\ttotal_questions=" & attempts & "\tcorrect=" & score & "\tsuccess_rate_pct=" & my formatPercent(sr) & "\tavg_elapsed_s=" & my formatSeconds(avg))
+    return true
 end runQuiz
 
 on getLastWakeSignature()
-    -- Extract timestamp of the most recent Wake event from pmset log
+    -- Prefer a stable kernel wake time; fallback to pmset parsing
     try
-        set cmd to "pmset -g log | egrep -i ' Wake |Wake from' | tail -1 | sed -E 's/^([0-9-]+ [0-9:]+).*/\\1/'"
-        set sig to do shell script cmd
-        return sig
+        set cmd1 to "sysctl -n kern.waketime | sed -E 's/.*sec = ([0-9]+).*/\\1/'"
+        set sig1 to do shell script cmd1
+        if sig1 is not "" then return sig1
+    end try
+    try
+        set cmd2 to "pmset -g log | egrep -i ' Wake |Wake from|DarkWake' | tail -1 | sed -E 's/^([0-9-]+ [0-9:]+).*/\\1/'"
+        set sig2 to do shell script cmd2
+        return sig2
     on error
         return ""
     end try
@@ -268,7 +333,9 @@ on run
     -- Initialize last wake signature and show once at login
     set lastWakeSig to getLastWakeSignature()
     set isShowingQuiz to true
-    my runQuiz()
+    try
+        my runQuiz()
+    end try
     set isShowingQuiz to false
 end run
 
@@ -276,10 +343,23 @@ on idle
     try
         set sig to getLastWakeSignature()
         if sig is not "" and sig is not lastWakeSig then
-            set lastWakeSig to sig
+            if sig is not pendingSigLogged then
+                my appendLog("wake_detected\ttimestamp=" & my isoTimestamp(current date) & "\tpmset_sig=\"" & sig & "\"")
+                set pendingSigLogged to sig
+            end if
             if not isShowingQuiz then
                 set isShowingQuiz to true
-                my runQuiz()
+                try
+                    set didRun to my runQuiz()
+                    -- Only consume the wake signature after a successful attempt
+                    if didRun is true then
+                        set lastWakeSig to sig
+                        set pendingSigLogged to ""
+                        my appendLog("wake_processed\ttimestamp=" & my isoTimestamp(current date) & "\tpmset_sig=\"" & sig & "\"")
+                    end if
+                on error
+                    -- Do not consume the signature; try again next idle
+                end try
                 set isShowingQuiz to false
             end if
         end if

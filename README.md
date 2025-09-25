@@ -47,7 +47,9 @@ Use the stay‑open AppleScript as a small background app that:
 
 ```bash
 mkdir -p "$HOME/Applications"
+# Important: compile as a stay‑open applet and relaunch
 osacompile -o "$HOME/Applications/Date Weekday Quiz.app" date_weekday_quiz_stayopen.applescript
+open -g "$HOME/Applications/Date Weekday Quiz.app"
 ```
 
 2) Add to Login Items:
@@ -56,6 +58,11 @@ osacompile -o "$HOME/Applications/Date Weekday Quiz.app" date_weekday_quiz_stayo
 3) Test it:
 - Double‑click `~/Applications/Date Weekday Quiz.app` to show the quiz.
 - Put your Mac to sleep, wake it; within ~5s the quiz appears.
+
+Wake logging:
+- On a wake detection: a `wake_detected` line is logged.
+- If the screen is still locked: a single `deferred` line is logged and the app retries after you unlock.
+- Once the quiz runs: `session_start`/`question`/`session_end` lines are logged, and `wake_processed` marks the wake as handled.
 
 Tweak interval: edit `checkIntervalSeconds` near the top of `date_weekday_quiz_stayopen.applescript`.
 
@@ -79,3 +86,5 @@ Then quit and relaunch the app.
 ## Troubleshooting
 
 - AppleScript permissions: If prompts don’t appear, make sure the app/script isn’t blocked by Focus modes or Screen Time limits.
+- Ensure the app stays open: `pgrep -fl "Date Weekday Quiz.app/Contents/MacOS/applet"` should show a running process.
+- Log lines not appearing after wake: tail the log `tail -f "$HOME/Library/Logs/Date Weekday Quiz.log"` and verify you see `wake_detected` after a wake. If you unlock quickly, you may not see `deferred` — that only logs while the screen is locked.

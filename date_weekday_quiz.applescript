@@ -119,7 +119,7 @@ on appendLog(lineText)
     try
         my ensureLogsDir()
         set lf to my logFilePath()
-        do shell script "printf %s\\n " & quoted form of (lineText as string) & " >> " & quoted form of lf
+        do shell script "printf '%s\\n' " & quoted form of (lineText as string) & " >> " & quoted form of lf
     end try
 end appendLog
 
@@ -129,6 +129,13 @@ on formatSeconds(n)
     set rounded to tenthsInt / 10.0
     return rounded as string
 end formatSeconds
+
+on formatPercent(n)
+    set n to n as real
+    set tenthsInt to (n * 10) as integer
+    set rounded to tenthsInt / 10.0
+    return rounded as string
+end formatPercent
 
 on joinWithCommas(lst)
     set {oldTID, text item delimiters} to {text item delimiters, ", "}
@@ -186,7 +193,7 @@ on main()
                 set endIso to my isoTimestamp(current date)
                 set sr to 0
                 if attempts > 0 then set sr to (score / attempts) * 100
-                my appendLog("question\ttimestamp=" & endIso & "\tstatus=cancelled\telapsed_s=" & my formatSeconds(qElapsed) & "\tshown=\"" & shown & "\"\tcorrect=\"" & correct & "\"\tscore=" & score & "\tattempts=" & attempts & "\tsuccess_rate_pct=" & (sr as string))
+                my appendLog("question\ttimestamp=" & endIso & "\tstatus=cancelled\telapsed_s=" & my formatSeconds(qElapsed) & "\tshown=\"" & shown & "\"\tcorrect=\"" & correct & "\"\tscore=" & score & "\tattempts=" & attempts & "\tsuccess_rate_pct=" & my formatPercent(sr))
 
                 set timesStrings to {}
                 repeat with t in timesSec
@@ -231,7 +238,7 @@ on main()
         end if
 
         set sr to (score / attempts) * 100
-        my appendLog("question\ttimestamp=" & endIso & "\tstatus=" & (wasCorrect as string) & "\telapsed_s=" & my formatSeconds(qElapsed) & "\tanswer=\"" & typed & "\"\tnormalized=\"" & canon & "\"\tshown=\"" & shown & "\"\tcorrect=\"" & correct & "\"\tscore=" & score & "\tattempts=" & attempts & "\tsuccess_rate_pct=" & (sr as string))
+        my appendLog("question\ttimestamp=" & endIso & "\tstatus=" & (wasCorrect as string) & "\telapsed_s=" & my formatSeconds(qElapsed) & "\tanswer=\"" & typed & "\"\tnormalized=\"" & canon & "\"\tshown=\"" & shown & "\"\tcorrect=\"" & correct & "\"\tscore=" & score & "\tattempts=" & attempts & "\tsuccess_rate_pct=" & my formatPercent(sr))
     end repeat
 
     set endIso to my isoTimestamp(current date)
@@ -251,7 +258,7 @@ on main()
         set avg to total / (count of timesSec)
     end if
     set sr to (score / attempts) * 100
-    my appendLog("session_end\ttimestamp=" & endIso & "\tstatus=completed\ttotal_questions=" & attempts & "\tcorrect=" & score & "\tsuccess_rate_pct=" & (sr as string) & "\tavg_elapsed_s=" & my formatSeconds(avg))
+    my appendLog("session_end\ttimestamp=" & endIso & "\tstatus=completed\ttotal_questions=" & attempts & "\tcorrect=" & score & "\tsuccess_rate_pct=" & my formatPercent(sr) & "\tavg_elapsed_s=" & my formatSeconds(avg))
 end main
 
 main()
