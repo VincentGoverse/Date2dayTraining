@@ -3,7 +3,7 @@
 -- Shows the quiz at login and again after each wake from sleep.
 
 property lastWakeSig : ""
-property checkIntervalSeconds : 5
+property checkIntervalSeconds : 1
 property isShowingQuiz : false
 property uiUnavailable : false
 property pendingSigLogged : ""
@@ -31,6 +31,36 @@ on ensureFrontmost()
         end if
     end try
 end ensureFrontmost
+
+on closeLingeringAlerts()
+    -- Dismiss any leftover dialogs from a previous run so we start from a clean state.
+    try
+        set nm to my appProcessName()
+        if nm is "" then return
+        tell application "System Events"
+            if not (exists process nm) then return
+            tell process nm
+                repeat with attempt from 1 to 5
+                    if (count of windows) is 0 then exit repeat
+                    try
+                        tell window 1
+                            if exists button "OK" then
+                                click button "OK"
+                            else if (count of buttons) > 0 then
+                                click button 1
+                            else
+                                exit repeat
+                            end if
+                        end tell
+                    on error
+                        exit repeat
+                    end try
+                    delay 0.1
+                end repeat
+            end tell
+        end tell
+    end try
+end closeLingeringAlerts
 
 on twoDigits(n)
     set n to (n as integer)
@@ -334,6 +364,7 @@ on run
     set lastWakeSig to getLastWakeSignature()
     set isShowingQuiz to true
     try
+        my closeLingeringAlerts()
         my runQuiz()
     end try
     set isShowingQuiz to false
@@ -350,6 +381,7 @@ on idle
             if not isShowingQuiz then
                 set isShowingQuiz to true
                 try
+                    my closeLingeringAlerts()
                     set didRun to my runQuiz()
                     -- Only consume the wake signature after a successful attempt
                     if didRun is true then
