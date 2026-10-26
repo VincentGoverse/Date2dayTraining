@@ -1,400 +1,500 @@
 #!/usr/bin/osascript
--- Date → Weekday Quiz (Stay‑Open AppleScript)
--- Shows the quiz at login and again after each wake from sleep.
+-- Two daily practice sessions, scheduled in the Mac's local time zone.
+use framework "Foundation"
+use framework "AppKit"
+use scripting additions
 
-property lastWakeSig : ""
-property checkIntervalSeconds : 1
+property appVersion : "2.0"
+property morningStartSeconds : (8 * 3600 + 55 * 60)
+property afternoonStartSeconds : (13 * 3600)
+property snoozeSeconds : 600
+property checkIntervalSeconds : 15
+property targetQuestions : 3
+property stateDay : ""
+property morningDone : false
+property afternoonDone : false
+property morningSnoozeUntil : missing value
+property afternoonSnoozeUntil : missing value
+property scheduleStartedAt : missing value
 property isShowingQuiz : false
 property uiUnavailable : false
-property pendingSigLogged : ""
-
-on appProcessName()
-    try
-        set f to (path to me) as alias
-        set finfo to info for f
-        set nm to name of finfo
-        if nm ends with ".app" then set nm to text 1 thru -5 of nm
-        return nm
-    on error
-        return ""
-    end try
-end appProcessName
-
-on ensureFrontmost()
-    try
-        activate
-    end try
-    try
-        set nm to my appProcessName()
-        if nm is not "" then
-            tell application "System Events" to set frontmost of (first application process whose name is nm) to true
-        end if
-    end try
-end ensureFrontmost
-
-on closeLingeringAlerts()
-    -- Dismiss any leftover dialogs from a previous run so we start from a clean state.
-    try
-        set nm to my appProcessName()
-        if nm is "" then return
-        tell application "System Events"
-            if not (exists process nm) then return
-            tell process nm
-                repeat with attempt from 1 to 5
-                    if (count of windows) is 0 then exit repeat
-                    try
-                        tell window 1
-                            if exists button "OK" then
-                                click button "OK"
-                            else if (count of buttons) > 0 then
-                                click button 1
-                            else
-                                exit repeat
-                            end if
-                        end tell
-                    on error
-                        exit repeat
-                    end try
-                    delay 0.1
-                end repeat
-            end tell
-        end tell
-    end try
-end closeLingeringAlerts
+property stateLoaded : false
+property activeSessionDay : ""
+property statusItem : missing value
+property morningMenuItem : missing value
+property afternoonMenuItem : missing value
 
 on twoDigits(n)
-    set n to (n as integer)
-    set s to "0" & (n as string)
-    return text -2 thru -1 of s
+    return text -2 thru -1 of ("0" & (n as integer as string))
 end twoDigits
 
+on isoDate(d)
+    return (year of d as integer as string) & "-" & my twoDigits(month of d as integer) & "-" & my twoDigits(day of d)
+end isoDate
+
 on isoTimestamp(d)
-    set y to year of d as integer
-    set m to month of d as integer
-    set dd to day of d as integer
-    set tSec to time of d as integer
-    set hh to (tSec div hours) as integer
-    set mm to ((tSec mod hours) div minutes) as integer
-    set ss to (tSec mod minutes) as integer
-    return (y as string) & "-" & twoDigits(m) & "-" & twoDigits(dd) & " " & twoDigits(hh) & ":" & twoDigits(mm) & ":" & twoDigits(ss)
+    set t to time of d
+    return my isoDate(d) & " " & my twoDigits(t div hours) & ":" & my twoDigits((t mod hours) div minutes) & ":" & my twoDigits(t mod minutes)
 end isoTimestamp
 
-on prettyDate(d)
-    -- Format: YYYY MonthName D (e.g., 2024 September 7)
-    set y to year of d as integer
-    set mname to month of d as string
-    set dd to day of d as integer
-    return (y as string) & " " & mname & " " & (dd as string)
-end prettyDate
-
-on trimWhitespace(s)
-    set t to s as string
-    set ws to {space, tab, return, linefeed}
-    -- left
-    repeat while (t is not "") and (character 1 of t is in ws)
-        if (length of t) ≤ 1 then
-            set t to ""
-            exit repeat
-        else
-            set t to text 2 thru -1 of t
-        end if
-    end repeat
-    -- right
-    repeat while (t is not "") and (character -1 of t is in ws)
-        if (length of t) ≤ 1 then
-            set t to ""
-            exit repeat
-        else
-            set t to text 1 thru -2 of t
-        end if
-    end repeat
-    return t
-end trimWhitespace
-
-on stripTrailingDots(s)
-    set t to s as string
-    repeat while (t is not "") and (character -1 of t is ".")
-        if (length of t) ≤ 1 then
-            set t to ""
-            exit repeat
-        else
-            set t to text 1 thru -2 of t
-        end if
-    end repeat
-    return t
-end stripTrailingDots
-
-on toLower(s)
-    try
-        return do shell script "printf %s " & quoted form of (s as string) & " | tr '[:upper:]' '[:lower:]'"
-    on error
-        -- Fallback: best-effort manual mapping A..Z → a..z
-        set t to s as string
-        set out to ""
-        repeat with i from 1 to count of characters of t
-            set ch to character i of t
-            set idn to id of ch
-            if idn ≥ 65 and idn ≤ 90 then
-                set out to out & character id (idn + 32)
-            else
-                set out to out & ch
-            end if
-        end repeat
-        return out
-    end try
-end toLower
+on stateFilePath()
+    return (POSIX path of (path to library folder from user domain)) & "Application Support/Date Weekday Quiz/schedule.plist"
+end stateFilePath
 
 on logFilePath()
     return (POSIX path of (path to library folder from user domain)) & "Logs/Date Weekday Quiz.log"
 end logFilePath
 
-on ensureLogsDir()
-    try
-        set logsDir to (POSIX path of (path to library folder from user domain)) & "Logs"
-        do shell script "mkdir -p " & quoted form of logsDir
-    end try
-end ensureLogsDir
-
 on appendLog(lineText)
     try
-        my ensureLogsDir()
-        set lf to my logFilePath()
-        do shell script "printf '%s\\n' " & quoted form of (lineText as string) & " >> " & quoted form of lf
+        set logsDir to (POSIX path of (path to library folder from user domain)) & "Logs"
+        do shell script "/bin/mkdir -p " & quoted form of logsDir
+        do shell script "/usr/bin/printf '%s\\n' " & quoted form of (lineText as string) & " >> " & quoted form of my logFilePath()
     end try
 end appendLog
 
-on formatSeconds(n)
-    set n to n as real
-    set tenthsInt to (n * 10) as integer
-    set rounded to tenthsInt / 10.0
-    return rounded as string
-end formatSeconds
+on saveState(nowDate)
+    set statePath to my stateFilePath()
+    set parentPath to (current application's NSString's stringWithString:statePath)'s stringByDeletingLastPathComponent()
+    set fm to current application's NSFileManager's defaultManager()
+    set madeDir to fm's createDirectoryAtPath:parentPath withIntermediateDirectories:true attributes:(missing value) |error|:(missing value)
+    if not (madeDir as boolean) then error "Could not create the practice schedule folder."
+    set saved to current application's NSMutableDictionary's dictionary()
+    saved's setObject:stateDay forKey:"day"
+    saved's setObject:morningDone forKey:"morning_done"
+    saved's setObject:afternoonDone forKey:"afternoon_done"
+    saved's setObject:scheduleStartedAt forKey:"schedule_started_at"
+    if morningSnoozeUntil is not missing value then saved's setObject:morningSnoozeUntil forKey:"morning_snooze_until"
+    if afternoonSnoozeUntil is not missing value then saved's setObject:afternoonSnoozeUntil forKey:"afternoon_snooze_until"
+    if not ((saved's writeToFile:statePath atomically:true) as boolean) then error "Could not save the practice schedule."
+end saveState
 
-on formatPercent(n)
-    set n to n as real
-    set tenthsInt to (n * 10) as integer
-    set rounded to tenthsInt / 10.0
-    return rounded as string
-end formatPercent
+on loadState(nowDate)
+    -- Do not carry runtime/script-saved properties across process launches.
+    set stateDay to ""
+    set morningDone to false
+    set afternoonDone to false
+    set morningSnoozeUntil to missing value
+    set afternoonSnoozeUntil to missing value
+    set scheduleStartedAt to nowDate
+    set statePath to my stateFilePath()
+    set fm to current application's NSFileManager's defaultManager()
+    set existsAlready to (fm's fileExistsAtPath:statePath) as boolean
+    set saved to current application's NSDictionary's dictionaryWithContentsOfFile:statePath
+    if saved is not missing value then
+        set stateDay to (saved's objectForKey:"day") as string
+        set morningDone to (saved's objectForKey:"morning_done") as boolean
+        set afternoonDone to (saved's objectForKey:"afternoon_done") as boolean
+        set value to saved's objectForKey:"schedule_started_at"
+        if value is not missing value then set scheduleStartedAt to value as date
+        set value to saved's objectForKey:"morning_snooze_until"
+        if value is not missing value then set morningSnoozeUntil to value as date
+        set value to saved's objectForKey:"afternoon_snooze_until"
+        if value is not missing value then set afternoonSnoozeUntil to value as date
+    else if existsAlready then
+        -- A damaged file should not silently manufacture completed sessions.
+        error "The saved practice schedule could not be read: " & statePath
+    end if
+    set stateLoaded to true
+    my rollStateToDate(nowDate)
+end loadState
 
-on joinWithCommas(lst)
-    set {oldTID, text item delimiters} to {text item delimiters, ", "}
+on rollStateToDate(nowDate)
+    set todayKey to my isoDate(nowDate)
+    if stateDay is not todayKey then
+        set stateDay to todayKey
+        set morningDone to false
+        set afternoonDone to false
+        set morningSnoozeUntil to missing value
+        set afternoonSnoozeUntil to missing value
+        my saveState(nowDate)
+        my updateStatusMenu()
+    end if
+end rollStateToDate
+
+on dueSlot(nowDate, morningComplete, afternoonComplete, morningDeadline, afternoonDeadline)
+    set secondsToday to time of nowDate
+    if secondsToday < morningStartSeconds then return ""
+    if secondsToday < afternoonStartSeconds then
+        if morningComplete then return ""
+        if morningDeadline is not missing value then
+            if nowDate < morningDeadline then return ""
+        end if
+        return "morning"
+    end if
+    if afternoonComplete then return ""
+    if afternoonDeadline is not missing value then
+        if nowDate < afternoonDeadline then return ""
+    end if
+    return "afternoon"
+end dueSlot
+
+on slotScheduledDate(slotName, nowDate)
+    set scheduledDate to nowDate + 0
+    if slotName is "morning" then
+        set time of scheduledDate to morningStartSeconds
+    else
+        set time of scheduledDate to afternoonStartSeconds
+    end if
+    return scheduledDate
+end slotScheduledDate
+
+on isUIAvailable()
+    -- Read the active console session without requiring Accessibility permission.
     try
-        set s to lst as string
-    on error
-        set text item delimiters to oldTID
-        error
+        set plistText to do shell script "/usr/sbin/ioreg -n Root -d 1 -a"
+        set plistData to (current application's NSString's stringWithString:plistText)'s dataUsingEncoding:(current application's NSUTF8StringEncoding)
+        set roots to current application's NSPropertyListSerialization's propertyListWithData:plistData options:0 format:(missing value) |error|:(missing value)
+        return my registryUIAvailable(roots)
+    on error errMsg number errNum
+        my appendLog("error\ttimestamp=" & my isoTimestamp(current date) & "\tcontext=screen_check\terror_number=" & errNum)
     end try
-    set text item delimiters to oldTID
-    return s
-end joinWithCommas
+    return false
+end isUIAvailable
+
+on registryUIAvailable(registryRoot)
+    if registryRoot is missing value then return false
+    if (registryRoot's isKindOfClass:(current application's NSDictionary)) as boolean then
+        set rootInfo to registryRoot
+    else
+        if (registryRoot's |count|() as integer) is 0 then return false
+        set rootInfo to registryRoot's objectAtIndex:0
+    end if
+    set consoleLocked to rootInfo's objectForKey:"IOConsoleLocked"
+    if consoleLocked is not missing value then
+        if consoleLocked as boolean then return false
+    end if
+    set consoleUsers to rootInfo's objectForKey:"IOConsoleUsers"
+    if consoleUsers is missing value then return false
+    repeat with userInfo in consoleUsers
+        set isConsole to userInfo's objectForKey:"kCGSSessionOnConsoleKey"
+        set isLoggedIn to userInfo's objectForKey:"kCGSessionLoginDoneKey"
+        if isConsole is not missing value and isLoggedIn is not missing value then
+            if (isConsole as boolean) and (isLoggedIn as boolean) then
+                set screenLocked to userInfo's objectForKey:"CGSSessionScreenIsLocked"
+                if screenLocked is missing value then return true
+                return not (screenLocked as boolean)
+            end if
+        end if
+    end repeat
+    return false
+end registryUIAvailable
+
+on ensureFrontmost()
+    current application's NSApp's activateIgnoringOtherApps:true
+end ensureFrontmost
+
+on slotLabel(slotName)
+    if slotName is "morning" then return "Morning practice"
+    if slotName is "afternoon" then return "After-lunch practice"
+    return "Extra practice"
+end slotLabel
+
+on dailyProgress()
+    set morningMark to "○"
+    set afternoonMark to "○"
+    if morningDone then set morningMark to "✓"
+    if afternoonDone then set afternoonMark to "✓"
+    return "Morning " & morningMark & "   ·   After lunch " & afternoonMark
+end dailyProgress
+
+on setupStatusMenu()
+    set statusItem to current application's NSStatusBar's systemStatusBar()'s statusItemWithLength:(current application's NSVariableStatusItemLength)
+    set statusMenu to current application's NSMenu's alloc()'s initWithTitle:"Date Weekday Quiz"
+    set morningMenuItem to current application's NSMenuItem's alloc()'s initWithTitle:"Morning · 8:55 am" action:(missing value) keyEquivalent:""
+    set afternoonMenuItem to current application's NSMenuItem's alloc()'s initWithTitle:"After lunch · 1:00 pm" action:(missing value) keyEquivalent:""
+    statusMenu's addItem:morningMenuItem
+    statusMenu's addItem:afternoonMenuItem
+    statusMenu's addItem:(current application's NSMenuItem's separatorItem())
+    set practiceItem to current application's NSMenuItem's alloc()'s initWithTitle:"Practice now" action:"practiceNow:" keyEquivalent:""
+    practiceItem's setTarget:me
+    statusMenu's addItem:practiceItem
+    set quitItem to current application's NSMenuItem's alloc()'s initWithTitle:"Quit Date Weekday Quiz" action:"quitFromMenu:" keyEquivalent:"q"
+    quitItem's setTarget:me
+    statusMenu's addItem:quitItem
+    statusItem's setMenu:statusMenu
+    (statusItem's button())'s setToolTip:"Date Weekday Quiz · 8:55 am and 1:00 pm"
+    my updateStatusMenu()
+end setupStatusMenu
+
+on updateStatusMenu()
+    if statusItem is missing value then return
+    set completedCount to 0
+    set morningTitle to "○ Morning · 8:55 am"
+    set afternoonTitle to "○ After lunch · 1:00 pm"
+    if morningDone then
+        set completedCount to completedCount + 1
+        set morningTitle to "✓ Morning · done"
+    end if
+    if afternoonDone then
+        set completedCount to completedCount + 1
+        set afternoonTitle to "✓ After lunch · done"
+    end if
+    (statusItem's button())'s setTitle:("D " & completedCount & "/2")
+    morningMenuItem's setTitle:morningTitle
+    afternoonMenuItem's setTitle:afternoonTitle
+end updateStatusMenu
+
+on snoozeSlot(slotName, nowDate)
+    my rollStateToDate(nowDate)
+    set deadline to nowDate + snoozeSeconds
+    if slotName is "morning" then
+        set morningSnoozeUntil to deadline
+    else if slotName is "afternoon" then
+        set afternoonSnoozeUntil to deadline
+    end if
+    my saveState(nowDate)
+    my appendLog("snoozed\ttimestamp=" & my isoTimestamp(nowDate) & "\tslot=" & slotName & "\tuntil=" & my isoTimestamp(deadline))
+end snoozeSlot
+
+on sessionDidComplete(slotName)
+    set nowDate to current date
+    my rollStateToDate(nowDate)
+    -- Finishing yesterday's quiz after midnight must not consume today's slot.
+    if stateDay is not activeSessionDay then return
+    if slotName is "morning" then
+        set morningDone to true
+        set morningSnoozeUntil to missing value
+    else if slotName is "afternoon" then
+        set afternoonDone to true
+        set afternoonSnoozeUntil to missing value
+    end if
+    my saveState(nowDate)
+    my updateStatusMenu()
+end sessionDidComplete
+
+on promptToStart(slotName)
+    try
+        my ensureFrontmost()
+        set reply to display dialog ((my slotLabel(slotName)) & " · about one minute" & return & "Three questions. Press Return to start." & return & return & my dailyProgress()) with title "Date Weekday Quiz" buttons {"Snooze 10 min", "Start"} default button "Start" cancel button "Snooze 10 min" with icon note giving up after 60
+        if gave up of reply then return false
+        return (button returned of reply is "Start")
+    on error errMsg number errNum
+        if errNum is -128 or errNum is -1719 or errNum is -1743 then return false
+        error errMsg number errNum
+    end try
+end promptToStart
+
+on presentSession(slotName)
+    set isShowingQuiz to true
+    set offeredDay to my isoDate(current date)
+    try
+        if my promptToStart(slotName) then
+            -- A ready dialog can straddle a window/day boundary. Never revive an old slot.
+            set nowDate to current date
+            my rollStateToDate(nowDate)
+            set activeSlot to my dueSlot(nowDate, morningDone, afternoonDone, missing value, missing value)
+            if (my isoDate(nowDate)) is offeredDay and (slotName is "extra" or activeSlot is slotName) then
+                set didComplete to my runQuiz(slotName)
+                if not didComplete and slotName is not "extra" and (my isoDate(current date)) is offeredDay then my snoozeSlot(slotName, current date)
+            end if
+        else if slotName is not "extra" and (my isoDate(current date)) is offeredDay then
+            my snoozeSlot(slotName, current date)
+        end if
+    on error errMsg number errNum
+        my appendLog("error\ttimestamp=" & my isoTimestamp(current date) & "\tcontext=session\terror_number=" & errNum)
+        if slotName is not "extra" and (my isoDate(current date)) is offeredDay then
+            try
+                my snoozeSlot(slotName, current date)
+            end try
+        end if
+    end try
+    set isShowingQuiz to false
+end presentSession
+
+on checkSchedule(nowDate)
+    if isShowingQuiz then return
+    if not stateLoaded then my loadState(nowDate)
+    my rollStateToDate(nowDate)
+    set slotName to my dueSlot(nowDate, morningDone, afternoonDone, morningSnoozeUntil, afternoonSnoozeUntil)
+    if slotName is "" then return
+    -- First installation starts at the next scheduled time, not a late-night catch-up.
+    if (my slotScheduledDate(slotName, nowDate)) < scheduleStartedAt then return
+    if not my isUIAvailable() then return
+    my presentSession(slotName)
+end checkSchedule
+
+on prettyDate(d)
+    return (year of d as integer as string) & " " & (month of d as string) & " " & (day of d as string)
+end prettyDate
+
+on trimWhitespace(s)
+    return ((current application's NSString's stringWithString:(s as string))'s stringByTrimmingCharactersInSet:(current application's NSCharacterSet's whitespaceAndNewlineCharacterSet())) as string
+end trimWhitespace
 
 on normalizedWeekdayName(ansText)
-    set t to stripTrailingDots(trimWhitespace(ansText))
-    set t to toLower(t)
-    if t is "mon" or t is "monday" then return "Monday"
-    if t is "tue" or t is "tues" or t is "tuesday" then return "Tuesday"
-    if t is "wed" or t is "weds" or t is "wednesday" then return "Wednesday"
-    if t is "thu" or t is "thur" or t is "thurs" or t is "thursday" then return "Thursday"
-    if t is "fri" or t is "friday" then return "Friday"
-    if t is "sat" or t is "saturday" then return "Saturday"
-    if t is "sun" or t is "sunday" then return "Sunday"
+    set t to my trimWhitespace(ansText)
+    repeat while t ends with "."
+        if length of t is 1 then return ""
+        set t to text 1 thru -2 of t
+    end repeat
+    ignoring case
+        if t is in {"1", "mon", "monday"} then return "Monday"
+        if t is in {"2", "tue", "tues", "tuesday"} then return "Tuesday"
+        if t is in {"3", "wed", "weds", "wednesday"} then return "Wednesday"
+        if t is in {"4", "thu", "thur", "thurs", "thursday"} then return "Thursday"
+        if t is in {"5", "fri", "friday"} then return "Friday"
+        if t is in {"6", "sat", "saturday"} then return "Saturday"
+        if t is in {"7", "sun", "sunday"} then return "Sunday"
+    end ignoring
     return ""
 end normalizedWeekdayName
 
 on randomDateLast100Years()
-    set today to (current date)
-    set rnd to (random number from 0 to 36525)
-    set rndDays to rnd as integer
-    set d to today - (rndDays * days)
-    -- Normalize to noon to avoid DST quirks
-    set time of d to (12 * hours)
+    set d to (current date) - ((random number from 0 to 36525) * days)
+    set time of d to 12 * hours
     return d
 end randomDateLast100Years
 
-on promptForWeekday(shownDate)
-    set dlgText to "What day of the week is " & shownDate & "?" & return & "(e.g., Mon or Monday)"
+on formatSeconds(n)
+    return (((round (n * 10)) / 10) as string)
+end formatSeconds
+
+on promptForWeekday(shownDate, questionNumber, totalQuestions)
     try
         my ensureFrontmost()
-        set r to display dialog dlgText default answer "" with icon note buttons {"Cancel", "OK"} default button "OK" cancel button "Cancel"
-        return text returned of r
+        set reply to display dialog ("Question " & questionNumber & " of " & totalQuestions & return & "What day of the week is " & shownDate & "?" & return & "1 Mon · 2 Tue · 3 Wed · 4 Thu · 5 Fri · 6 Sat · 7 Sun" & return & "Weekday names and abbreviations also work.") with title "Date Weekday Quiz" default answer "" buttons {"Snooze 10 min", "Answer"} default button "Answer" cancel button "Snooze 10 min" giving up after 120
+        if gave up of reply then return missing value
+        return text returned of reply
     on error errMsg number errNum
-        if errNum is -128 then
-            return missing value
-        else if errNum is -1719 or errNum is -1743 then
+        if errNum is -128 then return missing value
+        if errNum is -1719 or errNum is -1743 then
             set uiUnavailable to true
             return missing value
-        else
-            error errMsg number errNum
         end if
+        error errMsg number errNum
     end try
 end promptForWeekday
 
-on runQuiz()
-    set targetCorrect to 3
+on displayQuizAlert(titleText, messageText, isWarning)
+    my ensureFrontmost()
+    if isWarning then
+        display alert titleText message messageText as warning buttons {"OK"} default button "OK" giving up after 15
+    else
+        display alert titleText message messageText as informational buttons {"OK"} default button "OK" giving up after 15
+    end if
+end displayQuizAlert
+
+on runQuiz(slotName)
+    set uiUnavailable to false
     set score to 0
     set attempts to 0
     set timesSec to {}
-
-    -- Only log session_start once we actually begin interacting
-    set sessionStartDate to missing value
-    set sessionStartIso to ""
-
-    repeat while score < targetCorrect
-        set qStart to (current date)
-        set d to randomDateLast100Years()
-        set shown to prettyDate(d)
-        set correct to (weekday of d) as string
-
-        -- Ask until we get a non-empty answer or cancel
+    set activeSessionDay to my isoDate(current date)
+    set sessionID to (current application's NSUUID's UUID()'s UUIDString()) as string
+    set sessionFields to "\tsession_id=" & sessionID & "\tslot=" & slotName & "\tsession_day=" & activeSessionDay & "\tapp_version=" & appVersion
+    my appendLog("session_start\ttimestamp=" & my isoTimestamp(current date) & sessionFields)
+    repeat while attempts < targetQuestions
+        set d to my randomDateLast100Years()
+        set shown to my prettyDate(d)
+        set correct to weekday of d as string
         set canon to ""
         set typed to ""
+        set questionStarted to (current application's NSProcessInfo's processInfo()'s systemUptime()) as real
         repeat
-            set a to promptForWeekday(shown)
+            set a to my promptForWeekday(shown, attempts + 1, targetQuestions)
             if a is missing value then
-                if uiUnavailable then
-                    -- UI not available (likely lock screen). Defer quiz without alerts/log spam.
-                    set uiUnavailable to false
-                    my appendLog("deferred\ttimestamp=" & my isoTimestamp(current date) & "\treason=ui_unavailable")
-                    return false
-                end if
-                set qElapsed to ((current date) - qStart) as real
-                set endIso to my isoTimestamp(current date)
-                set sr to 0
-                if attempts > 0 then set sr to (score / attempts) * 100
-                my appendLog("question\ttimestamp=" & endIso & "\tstatus=cancelled\telapsed_s=" & my formatSeconds(qElapsed) & "\tshown=\"" & shown & "\"\tcorrect=\"" & correct & "\"\tscore=" & score & "\tattempts=" & attempts & "\tsuccess_rate_pct=" & my formatPercent(sr))
-
-                set timesStrings to {}
-                repeat with t in timesSec
-                    set end of timesStrings to my formatSeconds(t)
-                end repeat
-                set summaryTimes to my joinWithCommas(timesStrings)
-                my ensureFrontmost()
-                display alert "Quit" message ("Quiz cancelled. Final score: " & score & " / " & targetCorrect & return & "Times (s) per question: " & summaryTimes) as informational buttons {"OK"} default button "OK"
-
-                set avg to 0
-                if (count of timesSec) > 0 then
-                    set total to 0
-                    repeat with t in timesSec
-                        set total to total + t
-                    end repeat
-                    set avg to total / (count of timesSec)
-                end if
-                my appendLog("session_end\ttimestamp=" & endIso & "\tstatus=cancelled\ttotal_questions=" & attempts & "\tcorrect=" & score & "\tsuccess_rate_pct=" & (sr as string) & "\tavg_elapsed_s=" & my formatSeconds(avg))
-                return true
+                set elapsed to ((current application's NSProcessInfo's processInfo()'s systemUptime()) as real) - questionStarted
+                my appendLog("question\ttimestamp=" & my isoTimestamp(current date) & "\tstatus=cancelled\telapsed_s=" & my formatSeconds(elapsed) & "\tshown=\"" & shown & "\"\tcorrect=\"" & correct & "\"\tscore=" & score & "\tattempts=" & attempts & sessionFields)
+                my logSessionEnd("cancelled", score, attempts, timesSec, sessionFields)
+                return false
             end if
-            -- We are able to interact with UI; mark session start if not yet
-            if sessionStartDate is missing value then
-                set sessionStartDate to (current date)
-                set sessionStartIso to my isoTimestamp(sessionStartDate)
-                my appendLog("session_start\ttimestamp=" & sessionStartIso)
-            end if
-
-            set typed to a
-            set canon to normalizedWeekdayName(a)
-            if canon is "" then
-                my ensureFrontmost()
-                display alert "Answer Required" message "Please enter a weekday (e.g., Mon or Monday)." as informational buttons {"OK"} default button "OK"
-            else
-                exit repeat
-            end if
+            set typed to my trimWhitespace(a)
+            set canon to my normalizedWeekdayName(typed)
+            if canon is not "" then exit repeat
+            my displayQuizAlert("Weekday required", "Enter 1–7, a weekday name, or an abbreviation such as Mon.", false)
         end repeat
-
-        set qElapsed to ((current date) - qStart) as real
-        set endIso to my isoTimestamp(current date)
+        set elapsed to ((current application's NSProcessInfo's processInfo()'s systemUptime()) as real) - questionStarted
         set attempts to attempts + 1
-        set end of timesSec to qElapsed
-
-        set wasCorrect to (canon is equal to correct)
-        if wasCorrect then
-            set score to score + 1
-            set msg to ("Correct! " & score & " / " & targetCorrect & return & shown & " → " & correct)
-            my ensureFrontmost()
-            display alert "Correct" message msg as informational buttons {"OK"} default button "OK"
-        else
-            set msg to ("You answered: " & typed & return & "For " & shown & ", correct is: " & correct & ".")
-            my ensureFrontmost()
-            display alert "Incorrect" message msg as warning buttons {"OK"} default button "OK"
+        set end of timesSec to elapsed
+        set wasCorrect to (canon is correct)
+        if wasCorrect then set score to score + 1
+        set sr to 100 * score / attempts
+        -- Persist the answer before a feedback dialog can block or the app can quit.
+        my appendLog("question\ttimestamp=" & my isoTimestamp(current date) & "\tstatus=" & (wasCorrect as string) & "\telapsed_s=" & my formatSeconds(elapsed) & "\tanswer=\"" & typed & "\"\tnormalized=\"" & canon & "\"\tshown=\"" & shown & "\"\tcorrect=\"" & correct & "\"\tscore=" & score & "\tattempts=" & attempts & "\tsuccess_rate_pct=" & my formatSeconds(sr) & sessionFields)
+        if attempts < targetQuestions then
+            if wasCorrect then
+                my displayQuizAlert("Correct", shown & " → " & correct & return & my formatSeconds(elapsed) & " seconds · Question " & attempts & " of " & targetQuestions, false)
+            else
+                my displayQuizAlert("Incorrect", shown & " → " & correct & return & "You answered " & typed & "." & return & my formatSeconds(elapsed) & " seconds", true)
+            end if
         end if
-
-        set sr to (score / attempts) * 100
-        my appendLog("question\ttimestamp=" & endIso & "\tstatus=" & (wasCorrect as string) & "\telapsed_s=" & my formatSeconds(qElapsed) & "\tanswer=\"" & typed & "\"\tnormalized=\"" & canon & "\"\tshown=\"" & shown & "\"\tcorrect=\"" & correct & "\"\tscore=" & score & "\tattempts=" & attempts & "\tsuccess_rate_pct=" & my formatPercent(sr))
     end repeat
-
-    set endIso to my isoTimestamp(current date)
-    set timesStrings to {}
+    my logSessionEnd("completed", score, attempts, timesSec, sessionFields)
+    my sessionDidComplete(slotName)
+    set lastResult to "Correct"
+    if not wasCorrect then set lastResult to "Incorrect"
+    set timeStrings to {}
     repeat with t in timesSec
-        set end of timesStrings to my formatSeconds(t)
+        set end of timeStrings to my formatSeconds(t)
     end repeat
-    set summaryTimes to my joinWithCommas(timesStrings)
-    my ensureFrontmost()
-    display alert "All Done" message ("All done — " & targetCorrect & "/" & targetCorrect & "!" & return & "Times (s) per question: " & summaryTimes) as informational buttons {"OK"} default button "OK"
-
-    set avg to 0
-    if (count of timesSec) > 0 then
-        set total to 0
-        repeat with t in timesSec
-            set total to total + t
-        end repeat
-        set avg to total / (count of timesSec)
-    end if
-    set sr to (score / attempts) * 100
-    my appendLog("session_end\ttimestamp=" & endIso & "\tstatus=completed\ttotal_questions=" & attempts & "\tcorrect=" & score & "\tsuccess_rate_pct=" & my formatPercent(sr) & "\tavg_elapsed_s=" & my formatSeconds(avg))
+    set oldDelimiters to AppleScript's text item delimiters
+    set AppleScript's text item delimiters to ", "
+    set summaryTimes to timeStrings as string
+    set AppleScript's text item delimiters to oldDelimiters
+    set summary to (score as string) & " / " & targetQuestions & " correct" & return & "Last answer: " & lastResult & " · " & shown & " → " & correct & return & "Times (seconds): " & summaryTimes & return & my dailyProgress()
+    my displayQuizAlert("Session complete", summary, false)
     return true
 end runQuiz
 
-on getLastWakeSignature()
-    -- Prefer a stable kernel wake time; fallback to pmset parsing
-    try
-        set cmd1 to "sysctl -n kern.waketime | sed -E 's/.*sec = ([0-9]+).*/\\1/'"
-        set sig1 to do shell script cmd1
-        if sig1 is not "" then return sig1
-    end try
-    try
-        set cmd2 to "pmset -g log | egrep -i ' Wake |Wake from|DarkWake' | tail -1 | sed -E 's/^([0-9-]+ [0-9:]+).*/\\1/'"
-        set sig2 to do shell script cmd2
-        return sig2
-    on error
-        return ""
-    end try
-end getLastWakeSignature
+on logSessionEnd(resultStatus, score, attempts, timesSec, sessionFields)
+    set avg to 0
+    set sr to 0
+    if attempts > 0 then
+        set totalTime to 0
+        repeat with t in timesSec
+            set totalTime to totalTime + t
+        end repeat
+        set avg to totalTime / attempts
+        set sr to 100 * score / attempts
+    end if
+    my appendLog("session_end\ttimestamp=" & my isoTimestamp(current date) & "\tstatus=" & resultStatus & "\ttotal_questions=" & attempts & "\tcorrect=" & score & "\tsuccess_rate_pct=" & my formatSeconds(sr) & "\tavg_elapsed_s=" & my formatSeconds(avg) & sessionFields)
+end logSessionEnd
+
+on practiceNow:sender
+    if isShowingQuiz then return
+    set nowDate to current date
+    my rollStateToDate(nowDate)
+    set slotName to my dueSlot(nowDate, morningDone, afternoonDone, missing value, missing value)
+    if slotName is "" then set slotName to "extra"
+    my presentSession(slotName)
+end practiceNow:
+
+on quitFromMenu:sender
+    tell me to quit
+end quitFromMenu:
 
 on run
-    -- Initialize last wake signature and show once at login
-    set lastWakeSig to getLastWakeSignature()
-    set isShowingQuiz to true
-    try
-        my closeLingeringAlerts()
-        my runQuiz()
-    end try
     set isShowingQuiz to false
+    set statusItem to missing value
+    set morningMenuItem to missing value
+    set afternoonMenuItem to missing value
+    set nowDate to current date
+    my loadState(nowDate)
+    my setupStatusMenu()
+    my appendLog("app_started\ttimestamp=" & my isoTimestamp(nowDate) & "\tapp_version=" & appVersion & "\tmorning=08:55\tafternoon=13:00")
+    my checkSchedule(nowDate)
 end run
+
+on reopen
+    -- A Login Item and our login launcher may both open the same app. Treat
+    -- reopen as a schedule check, so duplicate launches cannot start extra quizzes.
+    if not isShowingQuiz then my checkSchedule(current date)
+end reopen
 
 on idle
     try
-        set sig to getLastWakeSignature()
-        if sig is not "" and sig is not lastWakeSig then
-            if sig is not pendingSigLogged then
-                my appendLog("wake_detected\ttimestamp=" & my isoTimestamp(current date) & "\tpmset_sig=\"" & sig & "\"")
-                set pendingSigLogged to sig
-            end if
-            if not isShowingQuiz then
-                set isShowingQuiz to true
-                try
-                    my closeLingeringAlerts()
-                    set didRun to my runQuiz()
-                    -- Only consume the wake signature after a successful attempt
-                    if didRun is true then
-                        set lastWakeSig to sig
-                        set pendingSigLogged to ""
-                        my appendLog("wake_processed\ttimestamp=" & my isoTimestamp(current date) & "\tpmset_sig=\"" & sig & "\"")
-                    end if
-                on error
-                    -- Do not consume the signature; try again next idle
-                end try
-                set isShowingQuiz to false
-            end if
-        end if
+        my checkSchedule(current date)
+    on error errMsg number errNum
+        my appendLog("error\ttimestamp=" & my isoTimestamp(current date) & "\tcontext=scheduler\terror_number=" & errNum)
     end try
     return checkIntervalSeconds
 end idle
+
+on quit
+    if statusItem is not missing value then current application's NSStatusBar's systemStatusBar()'s removeStatusItem:statusItem
+    set statusItem to missing value
+    set morningMenuItem to missing value
+    set afternoonMenuItem to missing value
+    continue quit
+end quit
