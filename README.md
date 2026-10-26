@@ -43,6 +43,8 @@ The app stays in the menu bar after login and shows today's completed sessions a
 
 Use number shortcuts `1`–`7` for Monday–Sunday, or full weekday names and common abbreviations, case-insensitively: `Mon`, `Tue`/`Tues`, `Wed`/`Weds`, `Thu`/`Thur`/`Thurs`, `Fri`, `Sat`, and `Sun`. Feedback shows the correct weekday and response time. The final score is the actual result, such as 2/3, followed by the final answer's feedback and all three response times.
 
+Questions show only the date prompt and question number. Click **?** for answer instructions and number shortcuts, then **Back** to return to the same question with your typed answer preserved. Time spent reading help is excluded from the recorded response time.
+
 An unanswered ready prompt closes after one minute and snoozes. An unanswered question closes after two minutes and snoozes the unfinished session. A snoozed unfinished session starts a fresh set of three questions. Feedback and completion dialogs close automatically after 15 seconds.
 
 ## Data and source

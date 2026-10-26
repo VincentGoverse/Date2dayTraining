@@ -4,7 +4,7 @@ use framework "Foundation"
 use framework "AppKit"
 use scripting additions
 
-property appVersion : "2.0"
+property appVersion : "2.0.1"
 property morningStartSeconds : (8 * 3600 + 55 * 60)
 property afternoonStartSeconds : (13 * 3600)
 property snoozeSeconds : 600
@@ -18,6 +18,7 @@ property afternoonSnoozeUntil : missing value
 property scheduleStartedAt : missing value
 property isShowingQuiz : false
 property uiUnavailable : false
+property questionHelpSeconds : 0
 property stateLoaded : false
 property activeSessionDay : ""
 property statusItem : missing value
@@ -351,11 +352,18 @@ on formatSeconds(n)
 end formatSeconds
 
 on promptForWeekday(shownDate, questionNumber, totalQuestions)
+    set draftAnswer to ""
     try
-        my ensureFrontmost()
-        set reply to display dialog ("Question " & questionNumber & " of " & totalQuestions & return & "What day of the week is " & shownDate & "?" & return & "1 Mon · 2 Tue · 3 Wed · 4 Thu · 5 Fri · 6 Sat · 7 Sun" & return & "Weekday names and abbreviations also work.") with title "Date Weekday Quiz" default answer "" buttons {"Snooze 10 min", "Answer"} default button "Answer" cancel button "Snooze 10 min" giving up after 120
-        if gave up of reply then return missing value
-        return text returned of reply
+        repeat
+            my ensureFrontmost()
+            set reply to display dialog ("What weekday is " & shownDate & "?") with title ("Question " & questionNumber & " of " & totalQuestions) default answer draftAnswer buttons {"?", "Snooze 10 min", "Answer"} default button "Answer" cancel button "Snooze 10 min" giving up after 120
+            if gave up of reply then return missing value
+            set draftAnswer to text returned of reply
+            if button returned of reply is not "?" then return draftAnswer
+            set helpStarted to (current application's NSProcessInfo's processInfo()'s systemUptime()) as real
+            display alert "How to answer" message ("Enter a weekday name or abbreviation, such as Monday or Mon." & return & return & "Number shortcuts:" & return & "1 Mon · 2 Tue · 3 Wed · 4 Thu · 5 Fri · 6 Sat · 7 Sun") as informational buttons {"Back"} default button "Back" giving up after 60
+            set questionHelpSeconds to questionHelpSeconds + ((current application's NSProcessInfo's processInfo()'s systemUptime()) as real) - helpStarted
+        end repeat
     on error errMsg number errNum
         if errNum is -128 then return missing value
         if errNum is -1719 or errNum is -1743 then
@@ -390,11 +398,12 @@ on runQuiz(slotName)
         set correct to weekday of d as string
         set canon to ""
         set typed to ""
+        set questionHelpSeconds to 0
         set questionStarted to (current application's NSProcessInfo's processInfo()'s systemUptime()) as real
         repeat
             set a to my promptForWeekday(shown, attempts + 1, targetQuestions)
             if a is missing value then
-                set elapsed to ((current application's NSProcessInfo's processInfo()'s systemUptime()) as real) - questionStarted
+                set elapsed to ((current application's NSProcessInfo's processInfo()'s systemUptime()) as real) - questionStarted - questionHelpSeconds
                 my appendLog("question\ttimestamp=" & my isoTimestamp(current date) & "\tstatus=cancelled\telapsed_s=" & my formatSeconds(elapsed) & "\tshown=\"" & shown & "\"\tcorrect=\"" & correct & "\"\tscore=" & score & "\tattempts=" & attempts & sessionFields)
                 my logSessionEnd("cancelled", score, attempts, timesSec, sessionFields)
                 return false
@@ -404,7 +413,7 @@ on runQuiz(slotName)
             if canon is not "" then exit repeat
             my displayQuizAlert("Weekday required", "Enter 1–7, a weekday name, or an abbreviation such as Mon.", false)
         end repeat
-        set elapsed to ((current application's NSProcessInfo's processInfo()'s systemUptime()) as real) - questionStarted
+        set elapsed to ((current application's NSProcessInfo's processInfo()'s systemUptime()) as real) - questionStarted - questionHelpSeconds
         set attempts to attempts + 1
         set end of timesSec to elapsed
         set wasCorrect to (canon is correct)
